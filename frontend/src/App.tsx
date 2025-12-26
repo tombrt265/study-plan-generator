@@ -1,10 +1,12 @@
 import { useState } from "react";
-import { extractStudyMaterial } from "./services/api";
+import { extractStudyMaterial, createKnowledgeGraph } from "./services/api";
 
 export default function App() {
   const [file, setFile] = useState<File | null>(null);
   const [text, setText] = useState("");
+  const [graphText, setGraphText] = useState("");
   const [loading, setLoading] = useState(false);
+  const [graphLoading, setGraphLoading] = useState(false);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -28,6 +30,22 @@ export default function App() {
       setText("Fehler beim Extrahieren.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleCreateGraph = async () => {
+    if (!text) return;
+
+    setGraphLoading(true);
+    setGraphText("");
+
+    try {
+      const res = await createKnowledgeGraph(text);
+      setGraphText(res.text ?? "Kein Graph-Text zurückgegeben.");
+    } catch {
+      setGraphText("Fehler beim Erstellen des Knowledge Graphs.");
+    } finally {
+      setGraphLoading(false);
     }
   };
 
@@ -75,6 +93,30 @@ export default function App() {
         readOnly
         placeholder="Extrahierter Text erscheint hier..."
         className="w-full h-64 mt-6 p-3 border rounded-lg resize-y border-gray-300 focus:outline-none focus:ring-2 focus:ring-green-400"
+      />
+
+      {/* Knowledge Graph Button */}
+      <button
+        onClick={handleCreateGraph}
+        disabled={!text || graphLoading}
+        className={`w-full mt-4 py-3 rounded-lg font-semibold text-white transition
+          ${
+            text && !graphLoading
+              ? "bg-blue-600 hover:bg-blue-700"
+              : "bg-gray-400 cursor-not-allowed"
+          }`}
+      >
+        {graphLoading
+          ? "Erstelle Knowledge Graph..."
+          : "Knowledge Graph erstellen"}
+      </button>
+
+      {/* Knowledge Graph Output */}
+      <textarea
+        value={graphText}
+        readOnly
+        placeholder="Knowledge Graph Output erscheint hier..."
+        className="w-full h-64 mt-6 p-3 border rounded-lg resize-y border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-400"
       />
     </div>
   );
