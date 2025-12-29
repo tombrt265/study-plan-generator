@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { extractStudyMaterial, createStudyPlan } from "./services/api";
-import ReactMarkdown from "react-markdown";
+import type { StudyPlan } from "./models";
 
 export default function App() {
   const [file, setFile] = useState<File | null>(null);
   const [studyMaterial, setStudyMaterial] = useState("");
-  const [planText, setPlanText] = useState("");
+  const [studyPlan, setStudyPlan] = useState<StudyPlan | string>("");
   const [loading, setLoading] = useState(false);
   const [planLoading, setPlanLoading] = useState(false);
 
@@ -38,13 +38,13 @@ export default function App() {
     if (!studyMaterial) return;
 
     setPlanLoading(true);
-    setPlanText("");
+    setStudyPlan("");
 
     try {
       const res = await createStudyPlan(studyMaterial);
-      setPlanText(res.study_plan ?? "Kein Graph-Text zurückgegeben.");
+      setStudyPlan(res ?? "Kein Graph-Text zurückgegeben.");
     } catch {
-      setPlanText("Fehler beim Erstellen des Knowledge Graphs.");
+      setStudyPlan("Fehler beim Erstellen des Knowledge Graphs.");
     } finally {
       setPlanLoading(false);
     }
@@ -52,9 +52,7 @@ export default function App() {
 
   return (
     <div className="max-w-xl mx-auto mt-16 p-6 bg-white rounded-lg shadow-md font-sans">
-      <h1 className="text-3xl font-bold text-center mb-8">
-        material extracter v1
-      </h1>
+      <h1 className="text-3xl font-bold text-center mb-8">study planner v1</h1>
 
       {/* File Upload */}
       <label
@@ -111,15 +109,30 @@ export default function App() {
       </button>
 
       {/* Study Plan Output */}
-      {/* <textarea
-        value={planText}
-        readOnly
-        placeholder="Study Plan Output erscheint hier..."
-        className="w-full h-64 mt-6 p-3 border rounded-lg resize-y border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-400"
-      /> */}
-      {planText && (
+      {typeof studyPlan === "string" ? (
+        <textarea
+          value={studyPlan}
+          readOnly
+          placeholder="Study Plan Output erscheint hier..."
+          className="w-full h-64 mt-6 p-3 border rounded-lg resize-y border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-400"
+        />
+      ) : (
         <div className="mt-6 p-6 bg-gray-50 rounded-lg prose max-w-none">
-          <ReactMarkdown>{planText}</ReactMarkdown>
+          <h2>Study Plan Overview</h2>
+          <p>{studyPlan.overview}</p>
+          <h3>Sessions:</h3>
+          {studyPlan.sessions.map((session, index) => (
+            <div key={index} className="mb-4">
+              <h4>
+                {session.topic.name} ({session.duration_minutes} minutes)
+              </h4>
+              <p>{session.information}</p>
+              <p>
+                <strong>Methods:</strong> {session.methods.join(", ")}
+              </p>
+            </div>
+          ))}
+          <h4>Total Duration: {studyPlan.total_duration_hours} hours</h4>
         </div>
       )}
     </div>

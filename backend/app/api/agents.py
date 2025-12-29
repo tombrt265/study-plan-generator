@@ -1,5 +1,5 @@
 from pydantic_ai import Agent, RunContext
-from app.api.models import StudyMaterial, KnowledgeGraph
+from app.api.models import StudyMaterial, KnowledgeGraph, StudyPlan, StudyMethod, StudyPlanEvaluation, StudyPlanEvaluationAssesments
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -7,7 +7,7 @@ load_dotenv()
 manager_agent = Agent(
   model="gpt-4o",
   deps_type=StudyMaterial,
-  output_type=str,
+  output_type=StudyPlan,
   output_retries=1,
   system_prompt="""
   You are a study-plan manager agent.
@@ -23,7 +23,7 @@ manager_agent = Agent(
   5. You must evaluate whether the study plan is realistically achievable.
   6. If the study plan is not achievable:
     - You must revise the study plan accordingly.
-  7. Only finalize and return the study plan once it is confirmed as achievable.
+  7. Only finalize and return the StudyPlan once it is confirmed as achievable.
 
   Constraints:
   - Do not skip any steps in the workflow.
@@ -89,15 +89,15 @@ graph_critic_agent = Agent(
 scheduling_agent = Agent(
   model="gpt-4o",
   deps_type=[StudyMaterial, KnowledgeGraph],
-  output_type=str,
+  output_type=StudyPlan,
   output_retries=1,
   system_prompt="Create a detailed study plan based on the provided knowledge graph and the study material."
 )
 
 schedule_critic_agent = Agent(
   model="gpt-4o",
-  deps_type=[StudyMaterial, str],
-  output_type=str,
+  deps_type=[StudyMaterial, StudyPlan],
+  output_type=StudyPlanEvaluation,
   output_retries=1,
   system_prompt="Evaluate the achievability of the provided study plan based on the study material."
 )
@@ -135,24 +135,59 @@ async def evaluate_knowledge_graph(ctx: RunContext[StudyMaterial], graph: Knowle
   return result.output
 
 @manager_agent.tool
-async def schedule_study_plan(ctx: RunContext[StudyMaterial], graph: KnowledgeGraph) -> str:
+async def schedule_study_plan(ctx: RunContext[StudyMaterial], graph: KnowledgeGraph) -> StudyPlan:
   prompt = f"""
-  Given the study material and the following knowledge graph:
+  You are generating a structured StudyPlan object.
 
-  Nodes:
-  {', '.join([f'{node.name}: {node.description}' for node in graph.nodes])}
+  Input:
+  - Study material
+  - A validated KnowledgeGraph with topics and relationships
 
-  Edges:
+  Knowledge Graph Topics:
+  {', '.join([node.name for node in graph.nodes])}
+
+  Knowledge Graph Relationships:
   {', '.join([f'({edge.from_topic} {edge.relationship.value} {edge.to_topic})' for edge in graph.edges])}
 
-  Create a detailed study plan that:
-  - Covers all topics in a logical order based on the relationships.
-  - Suggests time allocations for each topic.
-  - Recommends study methods (e.g., reading, practice problems, review sessions).
-  - Breaks down the plan into daily or weekly sessions.
+  Your task:
+  Create a StudyPlan that strictly conforms to the StudyPlan schema.
 
-  Format the output as a structured study plan with clear headings and bullet points.
+  Rules:
+
+  1. Overview
+  - Provide a concise summary of the overall study strategy.
+  - Do not repeat the study material verbatim.
+
+  2. Study Sessions
+  - Create a list of StudySession objects.
+  - Each StudySession MUST:
+    - Cover exactly ONE Topic from the knowledge graph.
+    - Reference the Topic object consistently (same name as in the graph).
+    - Include a short but precise explanation of what the student should learn about this topic.
+    - Specify a realistic duration in minutes (between 30 and 180).
+    - Include one or more StudyMethod values chosen ONLY from:
+      {', '.join([m.value for m in StudyMethod])}
+
+  3. Ordering
+  - Order the sessions logically using the knowledge graph relationships:
+    - PRECEDES → earlier session
+    - FOLLOWS → later session
+  - RELATED_TO topics may be placed adjacently.
+
+  4. Coverage
+  - Every Topic in the knowledge graph MUST appear in exactly one StudySession.
+  - Do NOT invent new topics.
+  - Do NOT omit any topic.
+
+  5. Total Duration
+  - Set total_duration_hours to the sum of all session durations, rounded to whole hours.
+
+  Output Constraints:
+  - Return ONLY a valid StudyPlan object.
+  - Do NOT use Markdown.
+  - Do NOT include headings, bullet points, or explanatory text outside the schema.
   """
+
   result = await scheduling_agent.run(
     deps=[ctx.deps, graph],
     user_prompt=prompt
@@ -160,7 +195,7 @@ async def schedule_study_plan(ctx: RunContext[StudyMaterial], graph: KnowledgeGr
   return result.output
 
 @manager_agent.tool
-async def evaluate_study_plan(ctx: RunContext[StudyMaterial], plan: str) -> str:
+async def evaluate_study_plan(ctx: RunContext[StudyMaterial], plan: StudyPlan) -> StudyPlanEvaluation:
   prompt = f"""
   Given the following study plan:
 
@@ -171,7 +206,7 @@ async def evaluate_study_plan(ctx: RunContext[StudyMaterial], plan: str) -> str:
   - Topic coverage: Does it adequately cover all topics from the knowledge graph?
   - Study methods: Are the recommended methods effective for learning the material?
 
-  Provide a concise assessment as either "achievable" or "needs revision", along with a brief justification.
+  Provide a concise assessment as one of {', '.join([e.value for e in StudyPlanEvaluationAssesments])}, along with a brief justification.
   """
   result = await schedule_critic_agent.run(
     deps=[ctx.deps, plan],
@@ -179,7 +214,7 @@ async def evaluate_study_plan(ctx: RunContext[StudyMaterial], plan: str) -> str:
   )
   return result.output
 
-async def generate_study_plan(material: StudyMaterial) -> str:
+async def generate_study_plan(material: StudyMaterial) -> StudyPlan:
   result = await manager_agent.run(
     deps=material,
     user_prompt="Create a comprehensive study plan based on the provided study material."

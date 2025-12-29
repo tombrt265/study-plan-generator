@@ -1,5 +1,5 @@
 const API_URL = import.meta.env.VITE_API_BASE_URL;
-import type { Topic, Edge } from "../models";
+import type { StudyPlan } from "../models";
 
 export async function extractStudyMaterial(
   formData: FormData
@@ -11,22 +11,7 @@ export async function extractStudyMaterial(
   return res.json();
 }
 
-export async function createKnowledgeGraph(
-  text: string
-): Promise<{ nodes: Topic[]; edges: Edge[] }> {
-  const res = await fetch(`${API_URL}/create-knowledge-graph`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ study_material: text }),
-  });
-  return res.json();
-}
-
-export async function createStudyPlan(
-  text: string
-): Promise<{ study_plan: string }> {
+export async function createStudyPlan(text: string): Promise<StudyPlan> {
   const res = await fetch(`${API_URL}/create-study-plan`, {
     method: "POST",
     headers: {

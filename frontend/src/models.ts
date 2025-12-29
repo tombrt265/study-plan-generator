@@ -1,17 +1,19 @@
-export type Topic = {
+export type StudyMethod = "reading" | "practice" | "flashcards" | "review";
+
+export interface Topic {
   name: string;
   description: string;
-};
+}
 
-export type TopicRelationship = "precedes" | "follows" | "related_to";
+export interface StudySession {
+  topic: Topic;
+  information: string;
+  duration_minutes: number;
+  methods: StudyMethod[];
+}
 
-export type Edge = {
-  source: Topic;
-  relation: TopicRelationship;
-  target: Topic;
-};
-
-export type KnowledgeGraph = {
-  nodes: Topic[];
-  edges: Edge[];
-};
+export interface StudyPlan {
+  overview: string;
+  sessions: StudySession[];
+  total_duration_hours: number;
+}
