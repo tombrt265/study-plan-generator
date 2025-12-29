@@ -12,6 +12,7 @@ export default function App() {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       setFile(e.target.files[0]);
+      setStudyMaterial(""); // optional: clear manual input if PDF selected
     }
   };
 
@@ -42,9 +43,9 @@ export default function App() {
 
     try {
       const res = await createStudyPlan(studyMaterial);
-      setStudyPlan(res ?? "Kein Graph-Text zurückgegeben.");
+      setStudyPlan(res ?? "Kein Study Plan zurückgegeben.");
     } catch {
-      setStudyPlan("Fehler beim Erstellen des Knowledge Graphs.");
+      setStudyPlan("Fehler beim Erstellen des Study Plans.");
     } finally {
       setPlanLoading(false);
     }
@@ -86,12 +87,15 @@ export default function App() {
         {loading ? "Verarbeite..." : "PDF hochladen"}
       </button>
 
-      {/* Extracted Text */}
+      {/* OR separator */}
+      <div className="text-center my-4 text-gray-500">oder</div>
+
+      {/* Manual Text Input */}
       <textarea
         value={studyMaterial}
-        readOnly
-        placeholder="Extrahierter Text erscheint hier..."
-        className="w-full h-48 mt-6 p-3 border rounded-lg border-gray-300 focus:outline-none focus:ring-2 focus:ring-green-400"
+        onChange={(e) => setStudyMaterial(e.target.value)}
+        placeholder="Gib hier deinen Test-Text ein..."
+        className="w-full h-48 p-3 border rounded-lg border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-400"
       />
 
       {/* Study Plan Button */}

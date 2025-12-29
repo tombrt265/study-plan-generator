@@ -1,6 +1,24 @@
 from enum import Enum
 from pydantic import BaseModel, Field
 
+class Quality(str, Enum):
+    GOOD = "good"
+    NEEDS_IMPROVEMENT = "needs_improvement"
+    BAD = "bad"
+
+class Evaluation(BaseModel):
+    quality: Quality = Field(description="Quality assessment result")
+    justification: str = Field(description="Justification for the quality assessment")
+
+class StudyPlanAchievability(str, Enum):
+    ACHIEVABLE = "achievable"
+    NEEDS_IMPROVEMENT = "needs_improvement"
+    UNACHIEVABLE = "unachievable"
+
+class StudyPlanEvaluation(BaseModel):
+    achievability: StudyPlanAchievability = Field(description="Overall assessment of the study plan")
+    justification: str = Field(description="Justification for the assessment")
+
 class StudyMaterial(BaseModel):
     study_material: str
 
@@ -38,12 +56,3 @@ class StudyPlan(BaseModel):
     overview: str = Field(description="High-level summary of the study plan")
     sessions: list[StudySession] = Field(description="Detailed study sessions")
     total_duration_hours: int = Field(description="Total planned study duration in hours")
-
-class StudyPlanEvaluationAssesments(str, Enum):
-    ACHIEVABLE = "achievable"
-    NEEDS_IMPROVEMENT = "needs_improvement"
-    UNACHIEVABLE = "unachievable"
-
-class StudyPlanEvaluation(BaseModel):
-    assessment: StudyPlanEvaluationAssesments = Field(description="Overall assessment of the study plan")
-    justification: str = Field(description="Justification for the assessment")

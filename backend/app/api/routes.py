@@ -11,5 +11,6 @@ async def extract_study_material(file: UploadFile = File(...)):
 
 @router.post("/create-study-plan", response_model=StudyPlan)
 async def create_study_plan(material: StudyMaterial) -> StudyPlan:
-    plan = await generate_study_plan(material)
+    language = "German"  # Example: specify the target language for translation
+    plan = await generate_study_plan(material, language=language)
     return plan

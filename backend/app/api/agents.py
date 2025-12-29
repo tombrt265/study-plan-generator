@@ -1,42 +1,8 @@
 from pydantic_ai import Agent, RunContext
-from app.api.models import StudyMaterial, KnowledgeGraph, StudyPlan, StudyMethod, StudyPlanEvaluation, StudyPlanEvaluationAssesments
+from app.api.models import Evaluation, Quality, StudyMaterial, KnowledgeGraph, StudyPlan, StudyMethod, StudyPlanEvaluation, StudyPlanAchievability
 from dotenv import load_dotenv
 
 load_dotenv()
-
-manager_agent = Agent(
-  model="gpt-4o",
-  deps_type=StudyMaterial,
-  output_type=StudyPlan,
-  output_retries=1,
-  system_prompt="""
-  You are a study-plan manager agent.
-
-  You are responsible for orchestrating other agents.
-
-  Workflow rules:
-  1. You must first create a knowledge graph from the study material.
-  2. You must evaluate the quality of the knowledge graph.
-  3. If the graph quality is not "good":
-    - You must refine or regenerate the graph before proceeding.
-  4. Only once the graph is assessed as "good", generate a study plan.
-  5. You must evaluate whether the study plan is realistically achievable.
-  6. If the study plan is not achievable:
-    - You must revise the study plan accordingly.
-  7. Only finalize and return the StudyPlan once it is confirmed as achievable.
-
-  Constraints:
-  - Do not skip any steps in the workflow.
-  - Do not generate a study plan before confirming the graph quality.
-  - Do not finalize the study plan before confirming its achievability.
-
-  Limits:
-    - You may attempt to improve the knowledge graph at most 2 times.
-    - You may attempt to revise the study plan at most 1 time.
-    - If quality is still insufficient, proceed with the best available result.
-
-  """
-)
 
 knowledge_graph_agent = Agent(
   model="gpt-4o",
@@ -79,9 +45,9 @@ knowledge_graph_agent = Agent(
 )
 
 graph_critic_agent = Agent(
-  model="gpt-4o",
+  model="gpt-4o-mini",
   deps_type=[StudyMaterial, KnowledgeGraph],
-  output_type=str,
+  output_type=Evaluation,
   output_retries=1,
   system_prompt="You are a knowledge graph critic. Evaluate the quality of the provided knowledge graph based on the study material."
 )
@@ -95,47 +61,68 @@ scheduling_agent = Agent(
 )
 
 schedule_critic_agent = Agent(
-  model="gpt-4o",
+  model="gpt-4o-mini",
   deps_type=[StudyMaterial, StudyPlan],
   output_type=StudyPlanEvaluation,
   output_retries=1,
   system_prompt="Evaluate the achievability of the provided study plan based on the study material."
 )
 
-@manager_agent.tool
-async def generate_knowledge_graph(ctx: RunContext[StudyMaterial]) -> KnowledgeGraph:
+translation_agent = Agent(
+  model="gpt-4o-mini",
+  deps_type=StudyPlan,
+  output_type=StudyPlan,
+  output_retries=1,
+  system_prompt="Translate the study plan into a different language if necessary. Maintain the original structure and content of the study plan."
+)
+
+async def generate_knowledge_graph(material: StudyMaterial) -> KnowledgeGraph:
   result = await knowledge_graph_agent.run(
-    deps=ctx.deps,
-    user_prompt=f"Study material: {ctx.deps.study_material}",
+    deps=material,
+    user_prompt=f"""
+    IMPORTANT:
+    The following study material is the ONLY source of information.
+    Do NOT use prior knowledge, assumptions, or general educational structures.
+    If something is not explicitly present, omit it.
+
+    Use the provided study material to construct a knowledge graph:
+
+    Study Material:
+    {material.study_material}
+    """,
   )
   return result.output
 
-@manager_agent.tool
-async def evaluate_knowledge_graph(ctx: RunContext[StudyMaterial], graph: KnowledgeGraph) -> str:
+async def evaluate_knowledge_graph(material: StudyMaterial, graph: KnowledgeGraph) -> Evaluation:
   prompt = f"""
-  Given the following knowledge graph:
+  Given the following knowledge graph and study material:
 
+  Knowledge Graph:
   Nodes:
   {', '.join([f'{node.name}: {node.description}' for node in graph.nodes])}
 
   Edges:
   {', '.join([f'({edge.from_topic} {edge.relationship.value} {edge.to_topic})' for edge in graph.edges])}
 
+  Study Material:
+  {material.study_material}
+
   Evaluate the quality of this knowledge graph based on:
   - Completeness: Are all key topics from the study material included?
   - Accuracy: Are the relationships between topics correctly represented?
   - Clarity: Is the graph easy to understand and navigate?
 
-  Provide a concise assessment as either "good" or "needs improvement", along with a brief justification.
+  Return an Evaluation:
+  1. Choose a quality out of {', '.join([q.value for q in Quality])}
+  2. Provide a brief justification.
   """
   result = await graph_critic_agent.run(
-    deps=[ctx.deps, graph],
+    deps=[material, graph],
     user_prompt=prompt
   )
   return result.output
 
-@manager_agent.tool
-async def schedule_study_plan(ctx: RunContext[StudyMaterial], graph: KnowledgeGraph) -> StudyPlan:
+async def schedule_study_plan(material: StudyMaterial, graph: KnowledgeGraph) -> StudyPlan:
   prompt = f"""
   You are generating a structured StudyPlan object.
 
@@ -143,10 +130,14 @@ async def schedule_study_plan(ctx: RunContext[StudyMaterial], graph: KnowledgeGr
   - Study material
   - A validated KnowledgeGraph with topics and relationships
 
-  Knowledge Graph Topics:
-  {', '.join([node.name for node in graph.nodes])}
+  Study Material:
+  {material.study_material}
 
-  Knowledge Graph Relationships:
+  Knowledge Graph:
+  Nodes:
+  {', '.join([f'{node.name}: {node.description}' for node in graph.nodes])}
+
+  Edges:
   {', '.join([f'({edge.from_topic} {edge.relationship.value} {edge.to_topic})' for edge in graph.edges])}
 
   Your task:
@@ -189,14 +180,16 @@ async def schedule_study_plan(ctx: RunContext[StudyMaterial], graph: KnowledgeGr
   """
 
   result = await scheduling_agent.run(
-    deps=[ctx.deps, graph],
+    deps=[material, graph],
     user_prompt=prompt
   )
   return result.output
 
-@manager_agent.tool
-async def evaluate_study_plan(ctx: RunContext[StudyMaterial], plan: StudyPlan) -> StudyPlanEvaluation:
+async def evaluate_study_plan(material: StudyMaterial, plan: StudyPlan) -> StudyPlanEvaluation:
   prompt = f"""
+  Given the following study material:
+  {material.study_material}
+
   Given the following study plan:
 
   {plan}
@@ -206,17 +199,54 @@ async def evaluate_study_plan(ctx: RunContext[StudyMaterial], plan: StudyPlan) -
   - Topic coverage: Does it adequately cover all topics from the knowledge graph?
   - Study methods: Are the recommended methods effective for learning the material?
 
-  Provide a concise assessment as one of {', '.join([e.value for e in StudyPlanEvaluationAssesments])}, along with a brief justification.
+  Provide a concise assessment as one of {', '.join([e.value for e in StudyPlanAchievability])}, along with a brief justification.
   """
   result = await schedule_critic_agent.run(
-    deps=[ctx.deps, plan],
+    deps=[material, plan],
     user_prompt=prompt
   )
   return result.output
 
-async def generate_study_plan(material: StudyMaterial) -> StudyPlan:
-  result = await manager_agent.run(
-    deps=material,
-    user_prompt="Create a comprehensive study plan based on the provided study material."
+async def translate_study_plan(plan: StudyPlan, language: str) -> StudyPlan:
+  result = await translation_agent.run(
+    deps=plan,
+    user_prompt=f"""
+    Translate the given study plan into {language}.
+
+    Study Plan:
+    Overview:
+    {plan.overview}
+
+    Study Sessions:
+    {', '.join([f'Topic: {session.topic.name}, Information: {session.information}, Duration: {session.duration_minutes}, Methods: {", ".join([method.value for method in session.methods])}' for session in plan.sessions])}
+
+    Total Duration Hours: {plan.total_duration_hours}
+    """
   )
   return result.output
+
+async def generate_study_plan(material: StudyMaterial, language: str) -> StudyPlan:
+  knowledge_graph_quality = Quality.BAD
+  attempts = 0
+
+  while knowledge_graph_quality != Quality.GOOD and attempts < 2:
+    graph = await generate_knowledge_graph(material)
+    evaluation = await evaluate_knowledge_graph(material, graph)
+    knowledge_graph_quality = evaluation.quality
+    # justification not yet used
+    attempts += 1
+
+  study_plan = StudyPlan(overview="", sessions=[], total_duration_hours=0)
+  study_plan_achievability = StudyPlanAchievability.UNACHIEVABLE
+  attempts = 0
+
+  while study_plan_achievability != StudyPlanAchievability.ACHIEVABLE and attempts < 2:
+    study_plan = await schedule_study_plan(material, graph)
+    plan_evaluation = await evaluate_study_plan(material, study_plan)
+    study_plan_achievability = plan_evaluation.achievability
+    # justification not yet used
+    attempts += 1
+
+  study_plan = await translate_study_plan(study_plan, language=language)
+
+  return study_plan
