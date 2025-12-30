@@ -1,4 +1,4 @@
-from pydantic_ai import Agent, RunContext
+from pydantic_ai import Agent
 from app.api.models import Evaluation, Quality, StudyMaterial, KnowledgeGraph, StudyPlan, StudyMethod, StudyPlanEvaluation, StudyPlanAchievability
 from dotenv import load_dotenv
 
@@ -10,37 +10,35 @@ knowledge_graph_agent = Agent(
   output_type=KnowledgeGraph,
   output_retries=1,
   system_prompt="""
-  With study material as input, your task is to construct a knowledge graph.
+  You are an AI tasked with constructing a KnowledgeGraph.
 
-  Do NOT use external knowledge.
-
-  Graph construction rules:
+  Rules:
 
   1. Nodes
   - Extract key topics from the study material.
   - Each topic must have:
     - a short, precise name
-    - a concise description derived from the study material
+    - a concise description derived from the study material (max 50 words)
 
   2. Relationships (Edges)
   - Create relationships ONLY between extracted topics.
-  - Each relationship must be one of:
+  - Allowed types:
     - PRECEDES: topic A is introduced before or is a prerequisite for topic B
     - FOLLOWS: topic A builds upon or comes after topic B
     - RELATED_TO: topics are conceptually related without clear ordering
-  - Relationships must be justified by the study material.
+  - Use consistent topic names exactly as in the nodes list.
 
   3. Output format
-  - Return the result strictly in the following structured format:
+  - strictly return
     KnowledgeGraph {
       nodes: [Topic, ...],
-      edges: [(Topic name, TopicRelationship, Topic name), ...]
+      edges: [(Topic.name, TopicRelationship, Topic.name), ...]
     }
 
   Constraints:
-  - Use consistent topic names across nodes and edges.
+  - If unsure about a topic, omit it.
   - Do not duplicate topics.
-  - Do not include explanations or commentary outside the structured output.
+  - Do not include explanations or commentary.
   """
 )
 
@@ -49,7 +47,22 @@ graph_critic_agent = Agent(
   deps_type=[StudyMaterial, KnowledgeGraph],
   output_type=Evaluation,
   output_retries=1,
-  system_prompt="You are a knowledge graph critic. Evaluate the quality of the provided knowledge graph based on the study material."
+  system_prompt=f"""
+  You are a knowledge graph critic. 
+  Your task:
+  - Evaluate a KnowledgeGraph based on the provided study material.
+  - Focus on three dimensions:
+    1. Completeness: Are all key topics from the material included?
+    2. Accuracy: Are the relationships between topics correct?
+    3. Clarity: Is the graph easy to understand and navigate?
+
+  Output:
+  - Return a structured Evaluation with:
+    - quality: one of {', '.join([q.value for q in Quality])}
+    - justification: a concise explanation for your rating
+  - Avoid commentary outside of the structured output.
+  - Use only the provided study material for your evaluation.
+  """
 )
 
 scheduling_agent = Agent(
@@ -57,7 +70,39 @@ scheduling_agent = Agent(
   deps_type=[StudyMaterial, KnowledgeGraph],
   output_type=StudyPlan,
   output_retries=1,
-  system_prompt="Create a detailed study plan based on the provided knowledge graph and the study material."
+  system_prompt=f"""
+  You are an AI that creates structured StudyPlans from a KnowledgeGraph and study material.
+
+  Rules:
+
+  1. Overview
+  - Provide a concise summary of the study strategy.
+  - Do not repeat the study material verbatim.
+
+  2. Study Sessions
+  - Each StudySession must cover exactly one Topic from the KnowledgeGraph.
+  - Reference the Topic object consistently by its name.
+  - Include a short explanation of what to learn about the topic.
+  - Specify a duration in minutes (30-180).
+  - Choose one or more StudyMethod values from {', '.join([m.value for m in StudyMethod])}.
+
+  3. Ordering
+  - Use the KnowledgeGraph relationships to determine session order:
+    - PRECEDES → earlier session
+    - FOLLOWS → later session
+    - RELATED_TO → may be placed adjacently
+
+  4. Coverage
+  - Every Topic in the KnowledgeGraph must appear in exactly one StudySession.
+  - Do not invent or omit topics.
+
+  5. Total Duration
+  - Set total_duration_hours to the sum of all session durations (rounded to whole hours).
+
+  Output Constraints:
+  - Return only a valid StudyPlan object conforming to the schema.
+  - Do not use Markdown, headings, bullet points, or explanatory text outside the schema.
+  """
 )
 
 schedule_critic_agent = Agent(
@@ -65,7 +110,26 @@ schedule_critic_agent = Agent(
   deps_type=[StudyMaterial, StudyPlan],
   output_type=StudyPlanEvaluation,
   output_retries=1,
-  system_prompt="Evaluate the achievability of the provided study plan based on the study material."
+  system_prompt=f"""
+  You are an AI that evaluates StudyPlans based on provided study material.
+
+  Evaluation Criteria:
+  1. Time Management
+  - Are session durations realistic and achievable?
+
+  2. Topic Coverage
+  - Are all topics from the study material adequately covered?
+
+  3. Study Methods
+  - Are the recommended study methods effective for learning the material?
+
+  Output:
+  - Return a structured StudyPlanEvaluation with:
+    - achievability: one of {', '.join([e.value for e in StudyPlanAchievability])}
+    - justification: a concise explanation for your rating
+  - Avoid commentary outside of the structured output.
+  - Base your evaluation strictly on the provided study material.
+  """
 )
 
 translation_agent = Agent(
@@ -73,29 +137,35 @@ translation_agent = Agent(
   deps_type=StudyPlan,
   output_type=StudyPlan,
   output_retries=1,
-  system_prompt="Translate the study plan into a different language if necessary. Maintain the original structure and content of the study plan."
+  system_prompt=f"""
+  You are an AI that translates StudyPlans into a specified language.
+
+  Rules:
+  - Maintain the exact structure and content of the original StudyPlan.
+  - Translate only text fields (overview, session information, topic names if needed).
+  - Do not modify durations, session ordering, or methods.
+  - Return a valid StudyPlan object.
+  - Avoid commentary, formatting changes, or additional text outside the schema.  
+  """
 )
 
 async def generate_knowledge_graph(material: StudyMaterial) -> KnowledgeGraph:
   result = await knowledge_graph_agent.run(
     deps=material,
     user_prompt=f"""
-    IMPORTANT:
-    The following study material is the ONLY source of information.
-    Do NOT use prior knowledge, assumptions, or general educational structures.
-    If something is not explicitly present, omit it.
+    Use the following study material to construct the KnowledgeGraph. 
+    This is the only source of information; do NOT use prior knowledge or assumptions.
 
-    Use the provided study material to construct a knowledge graph:
-
-    Study Material:
+    <<STUDY MATERIAL>>
     {material.study_material}
+    <<END STUDY MATERIAL>>
     """,
   )
   return result.output
 
 async def evaluate_knowledge_graph(material: StudyMaterial, graph: KnowledgeGraph) -> Evaluation:
   prompt = f"""
-  Given the following knowledge graph and study material:
+  Evaluate the following knowledge graph using only the provided study material.
 
   Knowledge Graph:
   Nodes:
@@ -104,17 +174,9 @@ async def evaluate_knowledge_graph(material: StudyMaterial, graph: KnowledgeGrap
   Edges:
   {', '.join([f'({edge.from_topic} {edge.relationship.value} {edge.to_topic})' for edge in graph.edges])}
 
-  Study Material:
+  <<STUDY MATERIAL>>
   {material.study_material}
-
-  Evaluate the quality of this knowledge graph based on:
-  - Completeness: Are all key topics from the study material included?
-  - Accuracy: Are the relationships between topics correctly represented?
-  - Clarity: Is the graph easy to understand and navigate?
-
-  Return an Evaluation:
-  1. Choose a quality out of {', '.join([q.value for q in Quality])}
-  2. Provide a brief justification.
+  <<END STUDY MATERIAL>>
   """
   result = await graph_critic_agent.run(
     deps=[material, graph],
@@ -124,14 +186,11 @@ async def evaluate_knowledge_graph(material: StudyMaterial, graph: KnowledgeGrap
 
 async def schedule_study_plan(material: StudyMaterial, graph: KnowledgeGraph) -> StudyPlan:
   prompt = f"""
-  You are generating a structured StudyPlan object.
+  Generate a StudyPlan based on the following inputs:
 
-  Input:
-  - Study material
-  - A validated KnowledgeGraph with topics and relationships
-
-  Study Material:
+  <<STUDY MATERIAL>>
   {material.study_material}
+  <<END STUDY MATERIAL>>
 
   Knowledge Graph:
   Nodes:
@@ -139,44 +198,6 @@ async def schedule_study_plan(material: StudyMaterial, graph: KnowledgeGraph) ->
 
   Edges:
   {', '.join([f'({edge.from_topic} {edge.relationship.value} {edge.to_topic})' for edge in graph.edges])}
-
-  Your task:
-  Create a StudyPlan that strictly conforms to the StudyPlan schema.
-
-  Rules:
-
-  1. Overview
-  - Provide a concise summary of the overall study strategy.
-  - Do not repeat the study material verbatim.
-
-  2. Study Sessions
-  - Create a list of StudySession objects.
-  - Each StudySession MUST:
-    - Cover exactly ONE Topic from the knowledge graph.
-    - Reference the Topic object consistently (same name as in the graph).
-    - Include a short but precise explanation of what the student should learn about this topic.
-    - Specify a realistic duration in minutes (between 30 and 180).
-    - Include one or more StudyMethod values chosen ONLY from:
-      {', '.join([m.value for m in StudyMethod])}
-
-  3. Ordering
-  - Order the sessions logically using the knowledge graph relationships:
-    - PRECEDES → earlier session
-    - FOLLOWS → later session
-  - RELATED_TO topics may be placed adjacently.
-
-  4. Coverage
-  - Every Topic in the knowledge graph MUST appear in exactly one StudySession.
-  - Do NOT invent new topics.
-  - Do NOT omit any topic.
-
-  5. Total Duration
-  - Set total_duration_hours to the sum of all session durations, rounded to whole hours.
-
-  Output Constraints:
-  - Return ONLY a valid StudyPlan object.
-  - Do NOT use Markdown.
-  - Do NOT include headings, bullet points, or explanatory text outside the schema.
   """
 
   result = await scheduling_agent.run(
@@ -187,19 +208,18 @@ async def schedule_study_plan(material: StudyMaterial, graph: KnowledgeGraph) ->
 
 async def evaluate_study_plan(material: StudyMaterial, plan: StudyPlan) -> StudyPlanEvaluation:
   prompt = f"""
-  Given the following study material:
+  Evaluate the following StudyPlan based only on the provided study material:
+
+  <<STUDY MATERIAL>>
   {material.study_material}
-
-  Given the following study plan:
-
-  {plan}
-
-  Evaluate whether this study plan is realistically achievable based on:
-  - Time management: Are the time allocations reasonable?
-  - Topic coverage: Does it adequately cover all topics from the knowledge graph?
-  - Study methods: Are the recommended methods effective for learning the material?
-
-  Provide a concise assessment as one of {', '.join([e.value for e in StudyPlanAchievability])}, along with a brief justification.
+  <<END STUDY MATERIAL>>
+  
+  <<STUDY PLAN>>
+  Overview:
+  {plan.overview}
+  Study Sessions:
+  {', '.join([f'Topic: {session.topic.name}, Information: {session.information}, Duration: {session.duration_minutes}, Methods: {", ".join([method.value for method in session.methods])}' for session in plan.sessions])}
+  Total Duration Hours: {plan.total_duration_hours}
   """
   result = await schedule_critic_agent.run(
     deps=[material, plan],
@@ -211,7 +231,7 @@ async def translate_study_plan(plan: StudyPlan, language: str) -> StudyPlan:
   result = await translation_agent.run(
     deps=plan,
     user_prompt=f"""
-    Translate the given study plan into {language}.
+    Translate the following StudyPlan into {language}:
 
     Study Plan:
     Overview:

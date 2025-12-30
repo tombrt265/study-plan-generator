@@ -118,22 +118,22 @@ export default function App() {
           <h2>Study Plan Output erscheint hier...</h2>
         </div>
       ) : (
-        <div className="mt-6 p-6 bg-gray-50 rounded-lg prose max-w-none">
-          <h2>Study Plan Overview</h2>
+        <div className="mt-6 p-6 bg-gray-50 rounded-lg prose max-w-none text-justify">
+          <h2 className="font-bold pb-2">Study Plan Overview</h2>
           <p>{studyPlan.overview}</p>
-          <h3>Sessions:</h3>
+          <h3 className="font-bold py-2">Sessions:</h3>
           {studyPlan.sessions.map((session, index) => (
             <div key={index} className="mb-4">
-              <h4>
+              <h4 className="font-semibold">
                 {session.topic.name} ({session.duration_minutes} minutes)
               </h4>
               <p>{session.information}</p>
-              <p>
-                <strong>Methods:</strong> {session.methods.join(", ")}
-              </p>
+              <p className="italic">Methods: {session.methods.join(", ")}</p>
             </div>
           ))}
-          <h4>Total Duration: {studyPlan.total_duration_hours} hours</h4>
+          <h4 className="font-semibold">
+            Total Duration: {studyPlan.total_duration_hours} hours
+          </h4>
         </div>
       )}
     </div>
