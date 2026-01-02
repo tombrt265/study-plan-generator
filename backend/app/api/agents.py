@@ -1,6 +1,8 @@
 from pydantic_ai import Agent
 from app.api.models import Evaluation, Quality, StudyMaterial, KnowledgeGraph, StudyPlan, StudyMethod, StudyPlanEvaluation, StudyPlanAchievability
 from dotenv import load_dotenv
+from datetime import datetime
+from app.api.logger import logger
 
 load_dotenv()
 
@@ -80,6 +82,14 @@ scheduling_agent = Agent(
   - Do not repeat the study material verbatim.
 
   2. Study Sessions
+  - Each StudySession MUST include a date in YYYY-MM-DD format.
+  - ALL dates MUST satisfy ALL of the following:
+    - date >= provided earliest date
+    - date <= provided latest date
+    - NO date may be before the earliest date
+    - NO date may be after the latest date
+  - Dates outside this range are INVALID and must NOT be generated.
+  - If unsure, choose a date within the valid range.
   - Each StudySession must cover exactly one Topic from the KnowledgeGraph.
   - Reference the Topic object consistently by its name.
   - Include a short explanation of what to learn about the topic.
@@ -98,7 +108,7 @@ scheduling_agent = Agent(
 
   5. Total Duration
   - Set total_duration_hours to the sum of all session durations (rounded to whole hours).
-
+  
   Output Constraints:
   - Return only a valid StudyPlan object conforming to the schema.
   - Do not use Markdown, headings, bullet points, or explanatory text outside the schema.
@@ -111,7 +121,7 @@ schedule_critic_agent = Agent(
   output_type=StudyPlanEvaluation,
   output_retries=1,
   system_prompt=f"""
-  You are an AI that evaluates StudyPlans based on provided study material.
+  You are an AI that evaluates StudyPlans based on provided study material, a knowledge graph and a due date.
 
   Evaluation Criteria:
   1. Time Management
@@ -122,6 +132,10 @@ schedule_critic_agent = Agent(
 
   3. Study Methods
   - Are the recommended study methods effective for learning the material?
+
+  4. Date Compliance
+  - Do all StudySession dates fall within the allowed date range? 
+  - if not, the plan is UNACHIEVABLE.
 
   Output:
   - Return a structured StudyPlanEvaluation with:
@@ -184,9 +198,17 @@ async def evaluate_knowledge_graph(material: StudyMaterial, graph: KnowledgeGrap
   )
   return result.output
 
-async def schedule_study_plan(material: StudyMaterial, graph: KnowledgeGraph) -> StudyPlan:
+async def schedule_study_plan(material: StudyMaterial, graph: KnowledgeGraph, date: str) -> StudyPlan:
+  current_date = datetime.now().date().isoformat()
+
   prompt = f"""
   Generate a StudyPlan based on the following inputs:
+
+  IMPORTANT DATE CONSTRAINTS (MANDATORY):
+  - Earliest Allowed Date: {current_date}
+  - Latest Allowed Date: {date}
+  - All StudySession dates MUST fall within this range.
+  - Dates outside this range are invalid.
 
   <<STUDY MATERIAL>>
   {material.study_material}
@@ -206,9 +228,11 @@ async def schedule_study_plan(material: StudyMaterial, graph: KnowledgeGraph) ->
   )
   return result.output
 
-async def evaluate_study_plan(material: StudyMaterial, plan: StudyPlan) -> StudyPlanEvaluation:
+async def evaluate_study_plan(material: StudyMaterial, plan: StudyPlan, date: str) -> StudyPlanEvaluation:
+  current_date = datetime.now().date().isoformat()
+  
   prompt = f"""
-  Evaluate the following StudyPlan based only on the provided study material:
+  Evaluate the achievability of the following StudyPlan based only on the provided study material:
 
   <<STUDY MATERIAL>>
   {material.study_material}
@@ -220,6 +244,11 @@ async def evaluate_study_plan(material: StudyMaterial, plan: StudyPlan) -> Study
   Study Sessions:
   {', '.join([f'Topic: {session.topic.name}, Information: {session.information}, Duration: {session.duration_minutes}, Methods: {", ".join([method.value for method in session.methods])}' for session in plan.sessions])}
   Total Duration Hours: {plan.total_duration_hours}
+  <<END STUDY PLAN>>
+
+  The earliest allowed date is {current_date}.
+  The latest allowed date is {date}.
+  All StudySession dates MUST fall within this range.
   """
   result = await schedule_critic_agent.run(
     deps=[material, plan],
@@ -245,28 +274,64 @@ async def translate_study_plan(plan: StudyPlan, language: str) -> StudyPlan:
   )
   return result.output
 
-async def generate_study_plan(material: StudyMaterial, language: str) -> StudyPlan:
-  knowledge_graph_quality = Quality.BAD
-  attempts = 0
+async def generate_study_plan(material: StudyMaterial, language: str, date: str) -> StudyPlan:
+    current_date = datetime.now().date().isoformat()
+    logger.info("Starting study plan generation pipeline")
+    logger.info("Target language: %s | Current Date: %s | Due Date: %s", language, current_date, date)
 
-  while knowledge_graph_quality != Quality.GOOD and attempts < 2:
-    graph = await generate_knowledge_graph(material)
-    evaluation = await evaluate_knowledge_graph(material, graph)
-    knowledge_graph_quality = evaluation.quality
-    # justification not yet used
-    attempts += 1
+    # --- Knowledge Graph Phase ---
+    knowledge_graph_quality = Quality.BAD
+    attempts = 0
 
-  study_plan = StudyPlan(overview="", sessions=[], total_duration_hours=0)
-  study_plan_achievability = StudyPlanAchievability.UNACHIEVABLE
-  attempts = 0
+    while knowledge_graph_quality != Quality.GOOD and attempts < 2:
+        attempts += 1
+        logger.info("Knowledge graph generation attempt %d", attempts)
 
-  while study_plan_achievability != StudyPlanAchievability.ACHIEVABLE and attempts < 2:
-    study_plan = await schedule_study_plan(material, graph)
-    plan_evaluation = await evaluate_study_plan(material, study_plan)
-    study_plan_achievability = plan_evaluation.achievability
-    # justification not yet used
-    attempts += 1
+        graph = await generate_knowledge_graph(material)
 
-  study_plan = await translate_study_plan(study_plan, language=language)
+        evaluation = await evaluate_knowledge_graph(material, graph)
+        knowledge_graph_quality = evaluation.quality
 
-  return study_plan
+        logger.info("Knowledge graph evaluation result: %s", knowledge_graph_quality)
+
+    if knowledge_graph_quality != Quality.GOOD:
+        logger.warning(
+            "Proceeding with knowledge graph of quality %s after %d attempts",
+            knowledge_graph_quality,
+            attempts,
+        )
+
+    # --- Study Plan Scheduling Phase ---
+    study_plan = StudyPlan(overview="", sessions=[], total_duration_hours=0)
+    study_plan_achievability = StudyPlanAchievability.UNACHIEVABLE
+    attempts = 0
+
+    while (
+        study_plan_achievability != StudyPlanAchievability.ACHIEVABLE
+        and attempts < 2
+    ):
+        attempts += 1
+        logger.info("Study plan scheduling attempt %d", attempts)
+
+        study_plan = await schedule_study_plan(material, graph, date)
+
+        plan_evaluation = await evaluate_study_plan(material, study_plan, date)
+        study_plan_achievability = plan_evaluation.achievability
+
+        logger.info("Study plan evaluation result: %s", plan_evaluation.achievability)
+
+    if study_plan_achievability != StudyPlanAchievability.ACHIEVABLE:
+        logger.warning(
+            "Proceeding with study plan of achievability %s after %d attempts",
+            study_plan_achievability,
+            attempts,
+        )
+
+    # --- Translation Phase ---
+    logger.info("Translating study plan into: %s", language)
+    study_plan = await translate_study_plan(study_plan, language=language)
+
+    logger.info("Study plan generation pipeline completed successfully")
+
+    return study_plan
+

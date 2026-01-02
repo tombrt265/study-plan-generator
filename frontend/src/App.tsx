@@ -137,7 +137,8 @@ export default function App() {
           {studyPlan.sessions.map((session, index) => (
             <div key={index} className="mb-4">
               <h4 className="font-semibold">
-                {session.topic.name} ({session.duration_minutes} minutes)
+                {session.topic.name} {session.date} ({session.duration_minutes}{" "}
+                minutes)
               </h4>
               <p>{session.information}</p>
               <p className="italic">Methods: {session.methods.join(", ")}</p>

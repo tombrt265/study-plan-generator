@@ -6,6 +6,7 @@ export interface Topic {
 }
 
 export interface StudySession {
+  date: string;
   topic: Topic;
   information: string;
   duration_minutes: number;

@@ -21,6 +21,7 @@ class StudyPlanEvaluation(BaseModel):
 
 class StudyMaterial(BaseModel):
     study_material: str
+    date: str = Field(description="Date for which the study plan is intended, in YYYY-MM-DD format")
 
 class Topic(BaseModel):
     name: str
@@ -47,6 +48,7 @@ class StudyMethod(str, Enum):
     REVIEW = "review"
 
 class StudySession(BaseModel):
+    date: str = Field(description="Date of the study session in YYYY-MM-DD format")
     topic: Topic = Field(description="Topic covered in this session")
     information: str = Field(description="Detailed information about the topic")
     duration_minutes: int = Field(description="Planned duration in minutes")
